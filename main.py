@@ -1,36 +1,54 @@
 import os
+import random
+import asyncio
 import aiosqlite
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
-# ----------------------------------------------------
-# 1. إعدادات البوت وقاعدة البيانات والرومات
-# ----------------------------------------------------
-TOKEN = os.getenv("DISCORD_TOKEN")
-DB_NAME = "points.db"
+# =========================
+# إعدادات البوت والقرص المدفوع
+# =========================
+DB_NAME = "points.db"  # مسار قاعدة البيانات
+CURRENCY_NAME = "فابريونيوم"
 
 # ID الروم المخصص للأوامر فقط
 ALLOWED_CHANNEL_ID = 1544385495310540881
 
-# أسعار الأسهم الافتراضية
-STOCK_PRICES = {
-    "aramco": 30,
-    "apple": 150,
-    "tesla": 200,
-    "nvidia": 120,
-    "disney": 90,
-    "boeing": 180,
-    "crypto": 50000,
+# الرتب المصرح لها بإقامة الفعاليات
+EVENT_ROLE_IDS = [1533463570564649121, 1533463569683845160]
+
+# سوق الأسهم - 7 شركات متنوعة
+STOCKS = {
+    "aramco": {"name": "أرامكو 🛢️", "price": 100, "trend": "➡️ ثبات", "volatility": 8},
+    "apple":  {"name": "أبل 🍎", "price": 180, "trend": "➡️ ثبات", "volatility": 15},
+    "tesla":  {"name": "تسلا 🚗", "price": 250, "trend": "➡️ ثبات", "volatility": 25},
+    "nvidia": {"name": "إنفيديا 💻", "price": 400, "trend": "➡️ ثبات", "volatility": 30},
+    "disney": {"name": "ديزني 🏰", "price": 120, "trend": "➡️ ثبات", "volatility": 18},
+    "boeing": {"name": "بوينج ✈️", "price": 210, "trend": "➡️ ثبات", "volatility": 22},
+    "crypto": {"name": "كريبتو 🪙", "price": 500, "trend": "➡️ ثبات", "volatility": 50}
+}
+
+# صور وفيديوهات GIF لتزيين الـ Embeds
+GIFS = {
+    "bank": "https://media.giphy.com/media/l0HFkA6omUyjVYqw8/giphy.gif",
+    "market": "https://media.giphy.com/media/JtBZm3Get439xMJqbe/giphy.gif",
+    "casino": "https://media.giphy.com/media/26fdY5h321e1LiaQ8/giphy.gif",
+    "slots": "https://media.giphy.com/media/l2Je2M4NfritVJ3va/giphy.gif",
+    "race": "https://media.giphy.com/media/3o7TKr3nzbh5WgCFxe/giphy.gif",
+    "rich": "https://media.giphy.com/media/xT1R9LUBvRE90p3M1W/giphy.gif",
+    "work": "https://media.giphy.com/media/3o72FfM5HJydzaM69a/giphy.gif",
+    "gift": "https://media.giphy.com/media/3o6fJ1BM7R2EBRDnxK/giphy.gif"
 }
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+bot = commands.Bot(command_prefix="=", intents=intents, help_command=None)
 
-# ----------------------------------------------------
-# 2. إنشاء وتحديث قاعدة البيانات تلقائياً (Auto Migration)
-# ----------------------------------------------------
+# =========================
+# قاعدة البيانات والتحقق
+# =========================
 async def init_db():
     db_dir = os.path.dirname(DB_NAME)
     if db_dir and not os.path.exists(db_dir):
@@ -41,36 +59,18 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS economy (
                 user_id TEXT PRIMARY KEY,
                 wallet INTEGER DEFAULT 100,
-                bank INTEGER DEFAULT 0
+                bank INTEGER DEFAULT 0,
+                aramco INTEGER DEFAULT 0,
+                apple INTEGER DEFAULT 0,
+                tesla INTEGER DEFAULT 0,
+                nvidia INTEGER DEFAULT 0,
+                disney INTEGER DEFAULT 0,
+                boeing INTEGER DEFAULT 0,
+                crypto INTEGER DEFAULT 0
             )
         """)
         await db.commit()
 
-        async with db.execute("PRAGMA table_info(economy)") as cursor:
-            columns_info = await cursor.fetchall()
-            existing_columns = [column[1] for column in columns_info]
-
-        required_columns = ["aramco", "apple", "tesla", "nvidia", "disney", "boeing", "crypto"]
-
-        for col in required_columns:
-            if col not in existing_columns:
-                await db.execute(f"ALTER TABLE economy ADD COLUMN {col} INTEGER DEFAULT 0")
-        
-        await db.commit()
-
-# ----------------------------------------------------
-# 3. تقييد البوت بروم معين فقط لكل الأوامر
-# ----------------------------------------------------
-@bot.check
-async def check_channel(ctx):
-    if ctx.channel.id != ALLOWED_CHANNEL_ID:
-        await ctx.send(f"❌ عفواً {ctx.author.mention}، الأوامر تعمل فقط في الروم المخصص: <#{ALLOWED_CHANNEL_ID}>", delete_after=5)
-        return False
-    return True
-
-# ----------------------------------------------------
-# 4. الدوال المساعدة للقراءة والتحديث
-# ----------------------------------------------------
 async def get_user_data(user_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute(
@@ -78,27 +78,30 @@ async def get_user_data(user_id: int):
             (str(user_id),)
         ) as cursor:
             row = await cursor.fetchone()
-            
-        if row is None:
-            await db.execute("INSERT INTO economy (user_id) VALUES (?)", (str(user_id),))
-            await db.commit()
-            return {
-                "wallet": 100, "bank": 0, "aramco": 0, "apple": 0,
-                "tesla": 0, "nvidia": 0, "disney": 0, "boeing": 0, "crypto": 0
-            }
-        
-        return {
-            "wallet": row[0], "bank": row[1], "aramco": row[2], "apple": row[3],
-            "tesla": row[4], "nvidia": row[5], "disney": row[6], "boeing": row[7], "crypto": row[8]
-        }
+            if row:
+                return {
+                    "wallet": row[0], "bank": row[1],
+                    "aramco": row[2], "apple": row[3], "tesla": row[4],
+                    "nvidia": row[5], "disney": row[6], "boeing": row[7], "crypto": row[8]
+                }
+            else:
+                await db.execute(
+                    "INSERT INTO economy (user_id, wallet, bank, aramco, apple, tesla, nvidia, disney, boeing, crypto) "
+                    "VALUES (?, 100, 0, 0, 0, 0, 0, 0, 0, 0)",
+                    (str(user_id),)
+                )
+                await db.commit()
+                return {
+                    "wallet": 100, "bank": 0,
+                    "aramco": 0, "apple": 0, "tesla": 0,
+                    "nvidia": 0, "disney": 0, "boeing": 0, "crypto": 0
+                }
 
-async def update_user(user_id: int, column: str, amount: int):
-    await get_user_data(user_id)
+async def update_user(user_id: int, field: str, amount: int):
+    data = await get_user_data(user_id)
+    new_val = max(0, data[field] + amount)
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute(
-            f"UPDATE economy SET {column} = {column} + ? WHERE user_id = ?",
-            (amount, str(user_id))
-        )
+        await db.execute(f"UPDATE economy SET {field} = ? WHERE user_id = ?", (new_val, str(user_id)))
         await db.commit()
 
 async def reset_user_data(user_id: int):
@@ -110,154 +113,164 @@ async def reset_user_data(user_id: int):
         """, (str(user_id),))
         await db.commit()
 
-# ----------------------------------------------------
-# 5. زر واستلام الهدايا (UI)
-# ----------------------------------------------------
+# تقييد البوت بروم معين
+@bot.check
+async def check_channel(ctx):
+    if ctx.channel.id != ALLOWED_CHANNEL_ID:
+        await ctx.send(f"❌ عفواً {ctx.author.mention}، الأوامر تعمل فقط في الروم المخصص: <#{ALLOWED_CHANNEL_ID}>", delete_after=5)
+        return False
+    return True
+
+# =========================
+# التحديث التلقائي للسوق (كل 5 دقائق)
+# =========================
+@tasks.loop(minutes=5)
+async def update_stock_market():
+    for key, stock in STOCKS.items():
+        vol = stock["volatility"]
+        change_percent = random.randint(-vol, vol)
+        
+        old_price = stock["price"]
+        change_amount = int(stock["price"] * (change_percent / 100))
+        stock["price"] = max(10, stock["price"] + change_amount)
+        
+        if stock["price"] > old_price:
+            stock["trend"] = f"📈 (+{change_percent}%)"
+        elif stock["price"] < old_price:
+            stock["trend"] = f"📉 ({change_percent}%)"
+        else:
+            stock["trend"] = "➡️ ثبات"
+
+# =========================
+# زر الفعالية التفاعلي
+# =========================
 class EventClaimView(discord.ui.View):
-    def __init__(self, amount: int = 50, timeout: float = 60.0):
-        super().__init__(timeout=timeout)
+    def __init__(self, amount: int):
+        super().__init__(timeout=60.0)
         self.amount = amount
+        self.claimed_users = set()
 
-    @discord.ui.button(label="استلام الهدية 🎉", style=discord.ButtonStyle.success, emoji="🎁", custom_id="claim_button")
+    @discord.ui.button(label="استلام الهدية 🎉", style=discord.ButtonStyle.success, emoji="🎁")
     async def claim_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await update_user(interaction.user.id, "wallet", self.amount)
-        button.disabled = True
-        await interaction.response.edit_message(view=self)
-        await interaction.followup.send(f"🎉 مبروك {interaction.user.mention}! حصلت على {self.amount} ريال!", ephemeral=True)
+        user_id = interaction.user.id
+        if user_id in self.claimed_users:
+            await interaction.response.send_message("❌ استلمت هذه الهدية من قبل!", ephemeral=True)
+            return
 
-# ----------------------------------------------------
-# 6. أحداث وتجاهل الأخطاء
-# ----------------------------------------------------
+        self.claimed_users.add(user_id)
+        await update_user(user_id, "wallet", self.amount)
+        await interaction.response.send_message(
+            f"🎉 **مبروك!** استلمت **{self.amount:,}** {CURRENCY_NAME} في محفظتك!",
+            ephemeral=True
+        )
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+# =========================
+# الأحداث وتجاهل الأخطاء
+# =========================
 @bot.event
 async def on_ready():
     await init_db()
-    print(f"✅ تم تشغيل البوت بنجاح باسم: {bot.user}")
+    if not update_stock_market.is_running():
+        update_stock_market.start()
+    print(f"✅ البوت شغال بنجاح باسم: {bot.user}")
 
 @bot.event
 async def on_command_error(ctx, error):
-    # تجاهل الأوامر غير الموجودة أو عدم استيفاء شروط الروم والصلاحيات
     if isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
         return
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ هذا الأمر خاص بالإدارة فقط!", delete_after=5)
         return
-    print(f"حدث خطأ غير متوقع: {error}")
+    print(f"خطأ: {error}")
 
-# ----------------------------------------------------
-# 7. أوامر الأعضاء العامة
-# ----------------------------------------------------
+# =========================
+# الأوامر الرئيسية والمساعدة
+# =========================
 
-# أمر المساعدة العام
 @bot.command(name="مساعدة", aliases=["help", "اوامر", "الأوامر"])
-async def help_command(ctx):
+async def help_cmd(ctx):
     embed = discord.Embed(
-        title="📖 دليل استخدام البوت",
-        description="إليك قائمة بالأوامر المتاحة للاستخدام:",
-        color=discord.Color.teal()
+        title="💎 دليل أوامر البوت المطور",
+        description=(
+            "**💵 الاقتصاد والبنك:**\n"
+            "• `=فلوس` ➜ معرفة رصيدك الكلي والأسهم\n"
+            "• `=راتب` ➜ راتبك اليومي (500)\n"
+            "• `=عمل` ➜ الحصول على كاش\n"
+            "• `=ضم [المبلغ]` / `=سحب [المبلغ]` ➜ البنك\n"
+            "• `=تحويل @العضو [المبلغ]` ➜ تحويل فلوس\n"
+            "• `=سرقة @العضو` ➜ محاولة سرقة كاش\n\n"
+            "**🎰 الألعاب والمراهنات:**\n"
+            "• `=حظ [المبلغ]` ➜ لعبة 50/50\n"
+            "• `=قمار [المبلغ]` ➜ لعبة الروليت (أحمر، أسود، أخضر)\n"
+            "• `=سلوت [المبلغ]` ➜ آلة القمار بـ 3 رموز\n"
+            "• `=سباق [المبلغ]` ➜ سباق الأحصنة والرهان\n\n"
+            "**📈 بورصة الأسهم:**\n"
+            "• `=سوق` ➜ أسعار الأسهم العالمية\n"
+            "• `=شراء [الشركة] [العدد]` | `=بيع [الشركة] [العدد]`\n"
+            "• `=اسهمي` ➜ محفظتك | `=توب` ➜ قائمة الأثرياء"
+        ),
+        color=discord.Color.gold()
     )
-    embed.add_field(name="💰 `!فلوس`", value="عرض الكاش والبنك والأسهم الخاصة بك.", inline=False)
-    embed.add_field(name="📈 `!اسهم`", value="استعراض قائمة أسعار الأسهم والممتلكات.", inline=False)
-    embed.add_field(name="🏆 `!توب`", value="عرض قائمة أثرى 10 أعضاء بالسيرفر.", inline=False)
-    embed.add_field(name="🎁 `!هدية [المبلغ]`", value="إنشاء فعالية توزيع هدية مالية.", inline=False)
-    embed.set_footer(text="استخدم الأوامر فقط داخل الروم المخصص 💬")
+    embed.set_thumbnail(url=GIFS["casino"])
     await ctx.send(embed=embed)
 
-# أمر الاستعلام عن الرصيد: !فلوس
-@bot.command(name="فلوس", aliases=["رصيد", "balance"])
-async def balance(ctx, target: discord.Member = None):
-    target = target or ctx.author
-    data = await get_user_data(target.id)
-    
-    embed = discord.Embed(title=f"💳 محفظة {target.display_name}", color=discord.Color.gold())
-    embed.add_field(name="💵 الكاش", value=f"{data['wallet']} ريال", inline=True)
-    embed.add_field(name="🏦 البنك", value=f"{data['bank']} ريال", inline=True)
-    
-    stocks_text = (
-        f"⛽ أرامكو: {data['aramco']}\n"
-        f"🍎 أبل: {data['apple']}\n"
-        f"🚗 تسلا: {data['tesla']}\n"
-        f"💚 إنفيديا: {data['nvidia']}\n"
-        f"🏰 ديزني: {data['disney']}\n"
-        f"✈️ بوينغ: {data['boeing']}\n"
-        f"🪙 كريبتو: {data['crypto']}"
+@bot.command(name="فعالية", aliases=["حدث", "event"])
+async def start_event(ctx, amount: int):
+    user_role_ids = [role.id for role in ctx.author.roles]
+    if not any(role_id in user_role_ids for role_id in EVENT_ROLE_IDS):
+        await ctx.send("❌ هذا الأمر مخصص لإدارة الفعاليات فقط!")
+        return
+
+    if amount <= 0:
+        await ctx.send("❌ حدد مبلغ جائزة صحيح!")
+        return
+
+    embed = discord.Embed(
+        title="🎉 فعالية خاصة بالجميع! 🎉",
+        description=(
+            f"أقام الإداري {ctx.author.mention} فعالية سريعة للجميع!\n\n"
+            f"💰 **الجائزة لكل شخص:** **{amount:,}** {CURRENCY_NAME}\n"
+            "⏳ **المدة:** 60 ثانية فقط!\n\n"
+            "اضغط على الزر بالأسفل لاستلام حصتك فوراً! 👇"
+        ),
+        color=discord.Color.gold()
     )
-    embed.add_field(name="📊 الأسهم والممتلكات", value=stocks_text, inline=False)
-    await ctx.send(embed=embed)
+    embed.set_thumbnail(url=GIFS["gift"])
+    embed.set_footer(text="ينتهي العرض بعد دقيقة واحدة")
 
-# أمر استعراض الأسهم: !اسهم
-@bot.command(name="اسهم", aliases=["أسهم", "stocks"])
-async def stocks_list(ctx):
-    p = STOCK_PRICES
-    embed = discord.Embed(title="📈 قائمة أسعار الأسهم الحالية", color=discord.Color.green())
-    embed.add_field(name="⛽ أرامكو (aramco)", value=f"{p['aramco']} ريال", inline=True)
-    embed.add_field(name="🍎 أبل (apple)", value=f"{p['apple']} ريال", inline=True)
-    embed.add_field(name="🚗 تسلا (tesla)", value=f"{p['tesla']} ريال", inline=True)
-    embed.add_field(name="💚 إنفيديا (nvidia)", value=f"{p['nvidia']} ريال", inline=True)
-    embed.add_field(name="🏰 ديزني (disney)", value=f"{p['disney']} ريال", inline=True)
-    embed.add_field(name="✈️ بوينغ (boeing)", value=f"{p['boeing']} ريال", inline=True)
-    embed.add_field(name="🪙 كريبتو (crypto)", value=f"{p['crypto']} ريال", inline=True)
-    await ctx.send(embed=embed)
+    view = EventClaimView(amount)
+    await ctx.send(content="@everyone 🔔 **فعالية جديدة!**", embed=embed, view=view)
 
-# أمر المتصدرين: !توب
-@bot.command(name="توب", aliases=["leaderboard", "top"])
-async def leaderboard(ctx):
-    p = STOCK_PRICES
-    query = """
-    SELECT user_id, 
-           (wallet + bank + (aramco * ?) + (apple * ?) + (tesla * ?) + (nvidia * ?) + (disney * ?) + (boeing * ?) + (crypto * ?)) AS total 
-    FROM economy 
-    ORDER BY total DESC 
-    LIMIT 10
-    """
-    params = (p["aramco"], p["apple"], p["tesla"], p["nvidia"], p["disney"], p["boeing"], p["crypto"])
+# =========================
+# قسم الألعاب والسرقة
+# =========================
+
+@bot.command(name="حظ")
+async def gamble(ctx, amount: int):
+    data = await get_user_data(ctx.author.id)
+    if amount <= 0 or data["wallet"] < amount:
+        await ctx.send("❌ ما عندك هذا المبلغ بالكاش!")
+        return
+
+    embed = discord.Embed(title="🎲 لعبة الحظ")
+    if random.choice([True, False]):
+        await update_user(ctx.author.id, "wallet", amount)
+        embed.color = discord.Color.green()
+        embed.description = f"🎉 **فوز ساحق!** فزت بـ **{amount * 2:,}** {CURRENCY_NAME}!"
+        embed.set_image(url=GIFS["rich"])
+    else:
+        await update_user(ctx.author.id, "wallet", -amount)
+        embed.color = discord.Color.red()
+        embed.description = f"💀 **خسارة!** راحت عليك **{amount:,}** {CURRENCY_NAME}."
     
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute(query, params) as cursor:
-            top_users = await cursor.fetchall()
-
-    embed = discord.Embed(title="🏆 قائمة أثرى أثرياء السيرفر", color=discord.Color.blue())
-    for idx, (user_id, total) in enumerate(top_users, start=1):
-        user = ctx.guild.get_member(int(user_id))
-        name = user.display_name if user else f"مستخدم ({user_id})"
-        embed.add_field(name=f"#{idx} {name}", value=f"💰 الثروة الإجمالية: {total:,} ريال", inline=False)
-
     await ctx.send(embed=embed)
 
-# أمر إرسال هدية: !هدية
-@bot.command(name="هدية")
-async def give_gift(ctx, amount: int = 100):
-    view = EventClaimView(amount=amount)
-    await ctx.send(f"🎁 **فعالية جديدة!** اضغط على الزر أدناه للحصول على **{amount}** ريال!", view=view)
-
-# ----------------------------------------------------
-# 8. أوامر الإدارة (مخفية من قائمة المساعدة)
-# ----------------------------------------------------
-@bot.command(name="اعطاء", aliases=["addmoney", "givemoney"])
-@commands.has_permissions(administrator=True)
-async def add_money(ctx, target: discord.Member, amount: int):
-    if amount <= 0:
-        await ctx.send("❌ يجب أن يكون المبلغ أكبر من صفر!")
-        return
-    await update_user(target.id, "wallet", amount)
-    await ctx.send(f"✅ تم إضافة **{amount:,}** ريال إلى محفظة {target.mention} بنجاح!")
-
-@bot.command(name="سحب", aliases=["removemoney", "take"])
-@commands.has_permissions(administrator=True)
-async def remove_money(ctx, target: discord.Member, amount: int):
-    if amount <= 0:
-        await ctx.send("❌ يجب أن يكون المبلغ أكبر من صفر!")
-        return
-    await update_user(target.id, "wallet", -amount)
-    await ctx.send(f"💸 تم سحب **{amount:,}** ريال من محفظة {target.mention} بنجاح!")
-
-@bot.command(name="تصفير", aliases=["reset", "clearuser"])
-@commands.has_permissions(administrator=True)
-async def reset_user(ctx, target: discord.Member):
-    await reset_user_data(target.id)
-    await ctx.send(f"⚠️ تم تصفير كافة أموال وأسهم وممتلكات {target.mention} بنجاح!")
-
-# ----------------------------------------------------
-# 9. تشغيل البوت
-# ----------------------------------------------------
-if __name__ == "__main__":
-    bot.run(TOKEN)
+@bot.command(name="قمار", aliases=["روليت"])
+async def roulette(ctx, amount: int):
+    data = await get_user_data(ctx.author.id)
+    if amount <= 0 or data["wallet"] < amount:
+        await ctx.send("❌ ما عندك هذا المبلغ بالكاش
