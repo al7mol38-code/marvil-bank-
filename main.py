@@ -6,8 +6,8 @@ from discord.ext import commands
 # ----------------------------------------------------
 # 1. إعدادات البوت وقاعدة البيانات والرومات
 # ----------------------------------------------------
-TOKEN = os.getenv("DISCORD_TOKEN")  # أو ضع التوكن المباشر بين علامتي تنصيص
-DB_NAME = "points.db"  # مسار قاعدة البيانات
+TOKEN = os.getenv("DISCORD_TOKEN")
+DB_NAME = "points.db"
 
 # ID الروم المخصص للأوامر فقط
 ALLOWED_CHANNEL_ID = 1544385495310540881
@@ -142,28 +142,35 @@ async def on_command_error(ctx, error):
         return
     raise error
 
-# أمر المساعدة
+# أمر المساعدة العام (للأعضاء الطبيعيين)
 @bot.command(name="مساعدة", aliases=["help", "اوامر", "الأوامر"])
 async def help_command(ctx):
     embed = discord.Embed(
-        title="📜 قائمة أوامر البوت",
-        description="إليك الأوامر المتاحة للاستخدام:",
+        title="📖 دليل استخدام البوت",
+        description="إليك قائمة بالأوامر التي يمكنك استخدامها في هذا الروم:",
         color=discord.Color.teal()
     )
-    embed.add_field(name="💳 `!فلوس`", value="عرض رصيدك والأسهم.", inline=False)
-    embed.add_field(name="🏆 `!توب`", value="عرض أثرى الأثرياء.", inline=False)
-    embed.add_field(name="🎁 `!هدية [المبلغ]`", value="إنشاء فعالية استلام هدية.", inline=False)
-    
-    if ctx.author.guild_permissions.administrator:
-        embed.add_field(
-            name="⚙️ **أوامر الإدارة الحصرية:**",
-            value=(
-                "🔹 `!اعطاء @العضو [المبلغ]` - إعطاء أموال للعضو\n"
-                "🔹 `!سحب @العضو [المبلغ]` - سحب أموال من العضو\n"
-                "🔹 `!تصفير @العضو` - تصفير كافة أموال وأسهم العضو"
-            ),
-            inline=False
-        )
+    embed.add_field(
+        name="💰 `!فلوس` (أو `!رصيد` / `!balance`)",
+        value="عرض رصيدك الكاش، حسابك البنكي، والأسهم التي تمتلكها.",
+        inline=False
+    )
+    embed.add_field(
+        name="📊 `!فلوس @العضو`",
+        value="يمكنك الاستعلام عن رصيد وممتلكات أي عضو آخر بالمشن.",
+        inline=False
+    )
+    embed.add_field(
+        name="🏆 `!توب` (أو `!top` / `!leaderboard`)",
+        value="عرض قائمة قائمة أثرى 10 أعضاء في السيرفر بناءً على مجموع الكاش والبنك وأسعار الأسهم.",
+        inline=False
+    )
+    embed.add_field(
+        name="🎁 `!هدية [المبلغ]`",
+        value="إنشاء فعالية سريعة تحتوي على زر ليستلم الأعضاء الهدية المحددة.",
+        inline=False
+    )
+    embed.set_footer(text="استخدم الأوامر بحرية داخل هذا الروم المخصص فقط 💬")
     await ctx.send(embed=embed)
 
 # أمر الاستعلام عن الرصيد: !فلوس
@@ -220,10 +227,8 @@ async def give_gift(ctx, amount: int = 100):
     await ctx.send(f"🎁 **فعالية جديدة!** اضغط على الزر أدناه للحصول على **{amount}** ريال!", view=view)
 
 # ----------------------------------------------------
-# 7. أوامر الإدارة الخاصة (Admin Commands)
+# 7. أوامر الإدارة المخفية عن قائمة المساعدة
 # ----------------------------------------------------
-
-# أمر إعطاء أموال: !اعطاء @العضو 5000
 @bot.command(name="اعطاء", aliases=["addmoney", "givemoney"])
 @commands.has_permissions(administrator=True)
 async def add_money(ctx, target: discord.Member, amount: int):
@@ -233,7 +238,6 @@ async def add_money(ctx, target: discord.Member, amount: int):
     await update_user(target.id, "wallet", amount)
     await ctx.send(f"✅ تم إضافة **{amount:,}** ريال إلى محفظة {target.mention} بنجاح!")
 
-# أمر سحب أموال: !سحب @العضو 2000
 @bot.command(name="سحب", aliases=["removemoney", "take"])
 @commands.has_permissions(administrator=True)
 async def remove_money(ctx, target: discord.Member, amount: int):
@@ -243,7 +247,6 @@ async def remove_money(ctx, target: discord.Member, amount: int):
     await update_user(target.id, "wallet", -amount)
     await ctx.send(f"💸 تم سحب **{amount:,}** ريال من محفظة {target.mention} بنجاح!")
 
-# أمر تصفير حساب العضو كاملاً: !تصفير @العضو
 @bot.command(name="تصفير", aliases=["reset", "clearuser"])
 @commands.has_permissions(administrator=True)
 async def reset_user(ctx, target: discord.Member):
