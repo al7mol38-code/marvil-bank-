@@ -8,7 +8,7 @@ from discord.ext import commands, tasks
 # =========================
 # إعدادات البوت والقرص المدفوع
 # =========================
-DB_NAME = "points.db"  # مسار قاعدة البيانات
+DB_NAME = "points.db"
 CURRENCY_NAME = "فابريونيوم"
 
 # ID الروم المخصص للأوامر فقط
@@ -28,7 +28,6 @@ STOCKS = {
     "crypto": {"name": "كريبتو 🪙", "price": 500, "trend": "➡️ ثبات", "volatility": 50}
 }
 
-# صور وفيديوهات GIF لتزيين الـ Embeds
 GIFS = {
     "bank": "https://media.giphy.com/media/l0HFkA6omUyjVYqw8/giphy.gif",
     "market": "https://media.giphy.com/media/JtBZm3Get439xMJqbe/giphy.gif",
@@ -113,7 +112,6 @@ async def reset_user_data(user_id: int):
         """, (str(user_id),))
         await db.commit()
 
-# تقييد البوت بروم معين
 @bot.check
 async def check_channel(ctx):
     if ctx.channel.id != ALLOWED_CHANNEL_ID:
@@ -122,7 +120,7 @@ async def check_channel(ctx):
     return True
 
 # =========================
-# التحديث التلقائي للسوق (كل 5 دقائق)
+# التحديث التلقائي للسوق
 # =========================
 @tasks.loop(minutes=5)
 async def update_stock_market():
@@ -180,6 +178,7 @@ async def on_ready():
 
 @bot.event
 async def on_command_error(ctx, error):
+    # تجاهل خطأ عدم وجود الأمر وخطأ التواجد بالروم المخصص
     if isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
         return
     if isinstance(error, commands.MissingPermissions):
@@ -273,4 +272,406 @@ async def gamble(ctx, amount: int):
 async def roulette(ctx, amount: int):
     data = await get_user_data(ctx.author.id)
     if amount <= 0 or data["wallet"] < amount:
-        await ctx.send("❌ ما عندك هذا المبلغ بالكاش
+        await ctx.send("❌ ما عندك هذا المبلغ بالكاش!")
+        return
+
+    embed_start = discord.Embed(
+        title="🎡 عجلة الروليت",
+        description=f"الرهان: **{amount:,}** {CURRENCY_NAME}\n\n"
+                    "1️⃣ **أحمر** (ضعف المبلغ 2x)\n"
+                    "2️⃣ **أسود** (ضعف المبلغ 2x)\n"
+                    "3️⃣ **أخضر** (14 ضعف المبلغ 14x 🔥)\n\n"
+                    "اكتب اسم اللون أو رقمه خلال 15 ثانية!",
+        color=discord.Color.purple()
+    )
+    embed_start.set_thumbnail(url=GIFS["casino"])
+    await ctx.send(embed=embed_start)
+
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel and m.content in ["1", "2", "3", "أحمر", "احمر", "أسود", "اسود", "أخضر", "اخضر"]
+
+    try:
+        choice_msg = await bot.wait_for("message", timeout=15.0, check=check)
+        choice = choice_msg.content.lower()
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ انتهى الوقت! تم إلغاء الرهان.")
+        return
+
+    outcome = random.choices(["أحمر", "أسود", "أخضر"], weights=[47, 47, 6], k=1)[0]
+    
+    user_choice = ""
+    if choice in ["1", "أحمر", "احمر"]: user_choice = "أحمر"
+    elif choice in ["2", "أسود", "اسود"]: user_choice = "أسود"
+    elif choice in ["3", "أخضر", "اخضر"]: user_choice = "أخضر"
+
+    embed_res = discord.Embed(title="🎡 نتيجة الروليت")
+    embed_res.set_thumbnail(url=GIFS["casino"])
+
+    if outcome == user_choice:
+        multiplier = 14 if outcome == "أخضر" else 2
+        win_amt = amount * (multiplier - 1)
+        await update_user(ctx.author.id, "wallet", win_amt)
+        embed_res.color = discord.Color.green()
+        embed_res.description = f"وقفت العجلة على **{outcome}**! 🎉 فزت بـ **{win_amt + amount:,}** {CURRENCY_NAME}!"
+    else:
+        await update_user(ctx.author.id, "wallet", -amount)
+        embed_res.color = discord.Color.red()
+        embed_res.description = f"وقفت العجلة على **{outcome}**! 💀 خسرت **{amount:,}** {CURRENCY_NAME}."
+
+    await ctx.send(embed=embed_res)
+
+@bot.command(name="سلوت", aliases=["آلة"])
+async def slot(ctx, amount: int):
+    data = await get_user_data(ctx.author.id)
+    if amount <= 0 or data["wallet"] < amount:
+        await ctx.send("❌ ما عندك هذا المبلغ بالكاش!") # تم إغلاق علامة التنصيص هنا
+        return
+
+    emojis = ["🍒", "🍋", "💎", "🔔", "7️⃣"]
+    r1, r2, r3 = random.choice(emojis), random.choice(emojis), random.choice(emojis)
+
+    embed = discord.Embed(title="🎰 آلة القمار السحرية", description=f"# [ {r1} | {r2} | {r3} ]", color=discord.Color.gold())
+    embed.set_thumbnail(url=GIFS["slots"])
+    
+    if r1 == r2 == r3:
+        mult = 10 if r1 == "7️⃣" else 5
+        win_amt = amount * mult
+        await update_user(ctx.author.id, "wallet", win_amt)
+        embed.add_field(name="النتيجة:", value=f"🎉 **جاك بوت كاسح!** فزت بـ **{win_amt:,}** {CURRENCY_NAME}!")
+    elif r1 == r2 or r2 == r3 or r1 == r3:
+        win_amt = int(amount * 0.5)
+        await update_user(ctx.author.id, "wallet", win_amt)
+        embed.add_field(name="النتيجة:", value=f"✨ رمزان متطابقان! استرجعت **{win_amt:,}** {CURRENCY_NAME}!")
+    else:
+        await update_user(ctx.author.id, "wallet", -amount)
+        embed.add_field(name="النتيجة:", value=f"💀 الحظ ما حالفك! خسرت **{amount:,}** {CURRENCY_NAME}.")
+
+    await ctx.send(embed=embed)
+
+@bot.command(name="سباق", aliases=["خيل"])
+async def race(ctx, amount: int):
+    data = await get_user_data(ctx.author.id)
+    if amount <= 0 or data["wallet"] < amount:
+        await ctx.send("❌ ما عندك هذا المبلغ بالكاش!")
+        return
+
+    horses = ["1️⃣ الحصان الأبيض 🐎", "2️⃣ الحصان الأسود 🐎", "3️⃣ الحصان الذهبي 🐎", "4️⃣ الحصان السريع 🐎"]
+    embed = discord.Embed(
+        title="🏇 ميدان سباق الأحصنة",
+        description=f"الرهان: **{amount:,}** {CURRENCY_NAME}\n\nاختر رقم حصانك (1 - 4):\n" + "\n".join(horses),
+        color=discord.Color.dark_gold()
+    )
+    embed.set_thumbnail(url=GIFS["race"])
+    await ctx.send(embed=embed)
+
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel and m.content in ["1", "2", "3", "4"]
+
+    try:
+        choice_msg = await bot.wait_for("message", timeout=15.0, check=check)
+        user_horse = int(choice_msg.content) - 1
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ انتهى الوقت!")
+        return
+
+    race_embed = discord.Embed(title="🏁 السباق مشتعل الآن!", description="🏇 💨 💨 💨 الأحصنة تركض بسرعة!", color=discord.Color.blue())
+    race_embed.set_image(url=GIFS["race"])
+    race_msg = await ctx.send(embed=race_embed)
+    await asyncio.sleep(3)
+
+    winner = random.randint(0, 3)
+    
+    res_embed = discord.Embed(title="🏆 خط النهاية!")
+    res_embed.set_thumbnail(url=GIFS["race"])
+
+    if user_horse == winner:
+        win_amt = amount * 3
+        await update_user(ctx.author.id, "wallet", win_amt)
+        res_embed.color = discord.Color.green()
+        res_embed.description = f"فاز **{horses[winner]}**!\n🎉 كسبت **{win_amt:,}** {CURRENCY_NAME}!"
+    else:
+        await update_user(ctx.author.id, "wallet", -amount)
+        res_embed.color = discord.Color.red()
+        res_embed.description = f"فاز **{horses[winner]}**!\n💀 خسرت رهانك بـ **{amount:,}** {CURRENCY_NAME}."
+
+    await race_msg.edit(embed=res_embed)
+
+# =========================
+# البورصة والمعاملات
+# =========================
+
+@bot.command(name="سوق", aliases=["market"])
+async def market(ctx):
+    embed = discord.Embed(title="📊 بورصة فابريونيوم العالمية", color=discord.Color.blue())
+    embed.set_thumbnail(url=GIFS["market"])
+    for key, stock in STOCKS.items():
+        embed.add_field(
+            name=f"{stock['name']} (`{key}`)",
+            value=f"السعر: **{stock['price']:,}** {CURRENCY_NAME} | **{stock['trend']}**",
+            inline=False
+        )
+    embed.set_footer(text="تتغير الأسعار تلقائياً كل 5 دقائق!")
+    await ctx.send(embed=embed)
+
+def get_stock_key(name: str):
+    name = name.lower()
+    mapping = {
+        "aramco": "aramco", "أرامكو": "aramco", "ارامكو": "aramco",
+        "apple": "apple", "أبل": "apple", "ابل": "apple",
+        "tesla": "tesla", "تسلا": "tesla",
+        "nvidia": "nvidia", "إنفيديا": "nvidia", "انفيديا": "nvidia",
+        "disney": "disney", "ديزني": "disney",
+        "boeing": "boeing", "بوينج": "boeing", "بوينغ": "boeing",
+        "crypto": "crypto", "كريبتو": "crypto"
+    }
+    return mapping.get(name, None)
+
+@bot.command(name="شراء", aliases=["buy"])
+async def buy_stocks(ctx, stock_name: str, amount: int):
+    key = get_stock_key(stock_name)
+    if not key or amount <= 0:
+        await ctx.send("❌ شركة غير صحيحة! اكتب `=سوق` لمعرفة أسماء الشركات المتاحة.")
+        return
+
+    stock = STOCKS[key]
+    cost = amount * stock["price"]
+    data = await get_user_data(ctx.author.id)
+
+    if data["wallet"] < cost:
+        await ctx.send(f"❌ الكاش ما يكفي! تحتاج **{cost:,}** {CURRENCY_NAME}.")
+        return
+
+    await update_user(ctx.author.id, "wallet", -cost)
+    await update_user(ctx.author.id, key, amount)
+    
+    embed = discord.Embed(title="📈 صفقة ناجحة!", description=f"اشتريت **{amount}** أسهم في **{stock['name']}** بـ **{cost:,}** {CURRENCY_NAME}!", color=discord.Color.green())
+    embed.set_thumbnail(url=GIFS["market"])
+    await ctx.send(embed=embed)
+
+@bot.command(name="بيع", aliases=["sell"])
+async def sell_stocks(ctx, stock_name: str, amount: int):
+    key = get_stock_key(stock_name)
+    if not key or amount <= 0:
+        await ctx.send("❌ شركة غير صحيحة! اكتب `=سوق` لمعرفة أسماء الشركات المتاحة.")
+        return
+
+    stock = STOCKS[key]
+    data = await get_user_data(ctx.author.id)
+
+    if data[key] < amount:
+        await ctx.send(f"❌ ما عندك هذا العدد! تملك **{data[key]}** أسهم فقط في {stock['name']}.")
+        return
+
+    revenue = amount * stock["price"]
+    await update_user(ctx.author.id, "wallet", revenue)
+    await update_user(ctx.author.id, key, -amount)
+
+    embed = discord.Embed(title="💰 بيع أسهم", description=f"بعت **{amount}** أسهم من **{stock['name']}** واستلمت **{revenue:,}** {CURRENCY_NAME}!", color=discord.Color.gold())
+    embed.set_thumbnail(url=GIFS["market"])
+    await ctx.send(embed=embed)
+
+@bot.command(name="اسهمي", aliases=["my-stocks", "اسهم"]) # إضافة "اسهم" كاسم مستعار
+async def my_stocks(ctx):
+    data = await get_user_data(ctx.author.id)
+    total_val = 0
+    desc = ""
+    
+    for key, stock in STOCKS.items():
+        count = data[key]
+        val = count * stock["price"]
+        total_val += val
+        if count > 0:
+            desc += f"• **{stock['name']}:** {count} أسهم (بقيمة {val:,} {CURRENCY_NAME})\n"
+
+    if not desc:
+        desc = "لا تمتلك أي أسهم حالياً! استخدم أمر `=سوق` للاستثمار."
+
+    embed = discord.Embed(title=f"📈 محفظة {ctx.author.display_name} الاستثمارية", description=desc, color=discord.Color.green())
+    embed.set_thumbnail(url=GIFS["market"])
+    embed.add_field(name="💎 إجمالي قيمة أسهمك:", value=f"**{total_val:,}** {CURRENCY_NAME}")
+    await ctx.send(embed=embed)
+
+@bot.command(name="فلوس", aliases=["رصيد", "bal"])
+async def balance(ctx, member: discord.Member = None):
+    target = member or ctx.author
+    data = await get_user_data(target.id)
+    
+    stocks_val = sum(data[key] * STOCKS[key]["price"] for key in STOCKS)
+    total = data["wallet"] + data["bank"] + stocks_val
+
+    embed = discord.Embed(title=f"💳 الحساب البنكي لـ {target.display_name}", color=discord.Color.purple())
+    embed.set_thumbnail(url=GIFS["bank"])
+    embed.add_field(name="💵 كاش المحفظة:", value=f"**{data['wallet']:,}** {CURRENCY_NAME}", inline=True)
+    embed.add_field(name="🏦 الرصيد في البنك:", value=f"**{data['bank']:,}** {CURRENCY_NAME}", inline=True)
+    embed.add_field(name="📈 قيمة الأسهم:", value=f"**{stocks_val:,}** {CURRENCY_NAME}", inline=False)
+    embed.add_field(name="💎 صافي الثروة:", value=f"**{total:,}** {CURRENCY_NAME}", inline=False)
+    await ctx.send(embed=embed)
+
+@bot.command(name="راتب", aliases=["يومي"])
+@commands.cooldown(1, 86400, commands.BucketType.user)
+async def daily(ctx):
+    await update_user(ctx.author.id, "wallet", 500)
+    embed = discord.Embed(title="🎉 الراتب اليومي", description=f"أخذت راتبك اليومي بقيمة **500** {CURRENCY_NAME}!", color=discord.Color.green())
+    embed.set_thumbnail(url=GIFS["rich"])
+    await ctx.send(embed=embed)
+
+@daily.error
+async def daily_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        hours = int(error.retry_after // 3600)
+        await ctx.send(f"⏳ راتبك الجاي بعد **{hours}** ساعة.")
+
+@bot.command(name="عمل")
+@commands.cooldown(1, 3600, commands.BucketType.user)
+async def work(ctx):
+    earnings = random.randint(50, 200)
+    await update_user(ctx.author.id, "wallet", earnings)
+    embed = discord.Embed(title="💼 دوام العمل", description=f"اشتغلت بجد وكسبت **{earnings}** {CURRENCY_NAME}!", color=discord.Color.blue())
+    embed.set_thumbnail(url=GIFS["work"])
+    await ctx.send(embed=embed)
+
+@work.error
+async def work_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        minutes = int(error.retry_after // 60)
+        await ctx.send(f"⏳ تقدر تشتغل بعد **{minutes}** دقيقة.")
+
+@bot.command(name="ضم", aliases=["إيداع"])
+async def deposit(ctx, amount: str):
+    data = await get_user_data(ctx.author.id)
+    amt = data["wallet"] if amount.lower() in ["الكل", "all"] else (int(amount) if amount.isdigit() else 0)
+
+    if amt <= 0 or data["wallet"] < amt:
+        await ctx.send("❌ ما عندك هذا المبلغ بالكاش!")
+        return
+
+    await update_user(ctx.author.id, "wallet", -amt)
+    await update_user(ctx.author.id, "bank", amt)
+    
+    embed = discord.Embed(title="🏦 إيداع بنكي", description=f"ضمت **{amt:,}** {CURRENCY_NAME} في البنك لحمايتها!", color=discord.Color.teal())
+    embed.set_thumbnail(url=GIFS["bank"])
+    await ctx.send(embed=embed)
+
+@bot.command(name="سحب")
+async def withdraw(ctx, amount: str):
+    data = await get_user_data(ctx.author.id)
+    amt = data["bank"] if amount.lower() in ["الكل", "all"] else (int(amount) if amount.isdigit() else 0)
+
+    if amt <= 0 or data["bank"] < amt:
+        await ctx.send("❌ ما عندك هذا المبلغ بالبنك!")
+        return
+
+    await update_user(ctx.author.id, "bank", -amt)
+    await update_user(ctx.author.id, "wallet", amt)
+
+    embed = discord.Embed(title="💵 سحب نقدي", description=f"سحبت **{amt:,}** {CURRENCY_NAME} من البنك للمحفظة!", color=discord.Color.gold())
+    embed.set_thumbnail(url=GIFS["bank"])
+    await ctx.send(embed=embed)
+
+@bot.command(name="تحويل")
+async def transfer(ctx, member: discord.Member, amount: int):
+    if member.bot or member.id == ctx.author.id or amount <= 0:
+        await ctx.send("❌ أمر خاطئ!")
+        return
+
+    data = await get_user_data(ctx.author.id)
+    if data["wallet"] < amount:
+        await ctx.send("❌ الكاش ما يكفي!")
+        return
+
+    await update_user(ctx.author.id, "wallet", -amount)
+    await update_user(member.id, "wallet", amount)
+    
+    embed = discord.Embed(title="💸 تحويل مال", description=f"حولت **{amount:,}** {CURRENCY_NAME} إلى {member.mention}!", color=discord.Color.green())
+    await ctx.send(embed=embed)
+
+@bot.command(name="سرقة")
+@commands.cooldown(1, 7200, commands.BucketType.user)
+async def rob(ctx, member: discord.Member):
+    if member.bot or member.id == ctx.author.id:
+        await ctx.send("❌ ما تقدر تسرق البوت أو نفسك!")
+        return
+
+    target_data = await get_user_data(member.id)
+    if target_data["wallet"] < 100:
+        await ctx.send("❌ مطفر، ما معه كاش يستهل تسرقه!")
+        return
+
+    embed = discord.Embed(title="🥷 عملية سرقة")
+    if random.random() < 0.40:
+        stolen = random.randint(10, int(target_data["wallet"] * 0.5))
+        await update_user(member.id, "wallet", -stolen)
+        await update_user(ctx.author.id, "wallet", stolen)
+        embed.color = discord.Color.green()
+        embed.description = f"نجحت السرقة! سرقت **{stolen:,}** {CURRENCY_NAME} من {member.mention}!"
+    else:
+        await update_user(ctx.author.id, "wallet", -50)
+        embed.color = discord.Color.red()
+        embed.description = f"🚨 مسكتك الشرطة وغرمتك **50** {CURRENCY_NAME}!"
+
+    await ctx.send(embed=embed)
+
+@bot.command(name="توب")
+async def leaderboard(ctx):
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute(
+            "SELECT user_id, (wallet + bank + (aramco * ?) + (apple * ?) + (tesla * ?) + (nvidia * ?) + (disney * ?) + (boeing * ?) + (crypto * ?)) AS total FROM economy ORDER BY total DESC LIMIT 10",
+            (
+                STOCKS["aramco"]["price"], STOCKS["apple"]["price"], STOCKS["tesla"]["price"],
+                STOCKS["nvidia"]["price"], STOCKS["disney"]["price"], STOCKS["boeing"]["price"],
+                STOCKS["crypto"]["price"]
+            )
+        ) as cursor:
+            users = await cursor.fetchall()
+
+    if not users:
+        await ctx.send("📭 ما فيه أحد مسجل.")
+        return
+
+    desc = ""
+    for idx, (user_id, total) in enumerate(users, start=1):
+        member = ctx.guild.get_member(int(user_id))
+        name = member.display_name if member else f"<@{user_id}>"
+        desc += f"**#{idx}** {name} — 💎 **{total:,}** {CURRENCY_NAME}\n"
+
+    embed = discord.Embed(title="🏆 قائـمة أثرى أثريـاء السيرفر", description=desc, color=discord.Color.gold())
+    embed.set_thumbnail(url=GIFS["rich"])
+    await ctx.send(embed=embed)
+
+# =========================
+# 👑 أوامر الإدارة الحصرية
+# =========================
+
+@bot.command(name="اعطاء", aliases=["give"])
+@commands.has_permissions(administrator=True)
+async def admin_give(ctx, member: discord.Member, amount: int):
+    if amount <= 0:
+        await ctx.send("❌ أدخل مبلغاً صحيحاً!")
+        return
+    await update_user(member.id, "wallet", amount)
+    await ctx.send(f"✅ تم إعطاء **{amount:,}** {CURRENCY_NAME} إلى {member.mention}!")
+
+@bot.command(name="سحب_ادارة", aliases=["take"])
+@commands.has_permissions(administrator=True)
+async def admin_take(ctx, member: discord.Member, amount: int):
+    if amount <= 0:
+        await ctx.send("❌ أدخل مبلغاً صحيحاً!")
+        return
+    await update_user(member.id, "wallet", -amount)
+    await ctx.send(f"💸 تم سحب **{amount:,}** {CURRENCY_NAME} من {member.mention}!")
+
+@bot.command(name="تصفير", aliases=["reset"])
+@commands.has_permissions(administrator=True)
+async def admin_reset(ctx, member: discord.Member):
+    await reset_user_data(member.id)
+    await ctx.send(f"⚠️ تم تصفير كافة ممتلكات وأسهم وأموال {member.mention} بنجاح!")
+
+# =========================
+# التشغيل
+# =========================
+if __name__ == "__main__":
+    token = os.getenv("DISCORD_TOKEN")
+    if token:
+        bot.run(token)
+    else:
+        print("❌ Token مفقود!")
