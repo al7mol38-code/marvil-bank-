@@ -144,7 +144,7 @@ class EventClaimView(discord.ui.View):
             ephemeral=True
         )
 
-    async on_timeout(self):
+    async def on_timeout(self):
         for item in self.children:
             item.disabled = True
 
