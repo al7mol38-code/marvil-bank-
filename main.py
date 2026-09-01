@@ -5,9 +5,10 @@ import discord
 from discord.ext import commands, tasks
 
 # =========================
-# إعدادات البوت
+# إعدادات البوت والقرص المدفوع
 # =========================
-DB_NAME = "points.db"
+# المسار المخصص للقرص المدفوع في Render
+DB_NAME = "/var/data/bot-data/points.db"
 CURRENCY_NAME = "فابريونيوم"
 
 # أسعار السوق المبدئية
@@ -24,8 +25,12 @@ bot = commands.Bot(command_prefix="=", intents=intents, help_command=None)
 # قاعدة البيانات
 # =========================
 async def init_db():
+    # التأكد من إنشاء المجلد الخاص بالقرص إن لم يكن موجوداً
+    db_dir = os.path.dirname(DB_NAME)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
+
     async with aiosqlite.connect(DB_NAME) as db:
-        # جدول الاقتصاد
         await db.execute("""
             CREATE TABLE IF NOT EXISTS economy (
                 user_id TEXT PRIMARY KEY,
@@ -66,12 +71,11 @@ async def update_user(user_id: int, wallet_change: int = 0, bank_change: int = 0
 @tasks.loop(minutes=5)
 async def update_stock_market():
     global stock_price, stock_trend
-    # نسبة التغير بين -30% إلى +30%
     change_percent = random.randint(-30, 30)
     
     old_price = stock_price
     change_amount = int(stock_price * (change_percent / 100))
-    stock_price = max(10, stock_price + change_amount)  # السعر لا يقل عن 10
+    stock_price = max(10, stock_price + change_amount)
     
     if stock_price > old_price:
         stock_trend = f"📈 ارتفاع (+{change_percent}%)"
@@ -88,16 +92,16 @@ async def on_ready():
     await init_db()
     if not update_stock_market.is_running():
         update_stock_market.start()
-    print(f"✅ البوت شغال وسوق الأسهم مفعل باسم: {bot.user}")
+    print(f"✅ البوت شغال ومربوط بالقرص المدفوع بنجاح باسم: {bot.user}")
 
 # =========================
-# الأوامر المبسطة
+# الأوامر
 # =========================
 
 @bot.command(name="مساعدة")
 async def help_cmd(ctx):
     embed = discord.Embed(
-        title="💎 أوامر فابريونيوم والسوق",
+        title="💎 أوامر فابريونيوم",
         description=(
             "**البنك والفلوس:**\n"
             "• `=فلوس` ➜ معرفة رصيدك والأسهم\n"
