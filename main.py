@@ -6,7 +6,8 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="", intents=intents)
+# استخدام بادئة واضحة مثل '!' لتجنب مشاكل التداخل
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # روم الـ bank المخصص للأوامر
 ALLOWED_CHANNEL_ID = 1544385495310540881
@@ -41,7 +42,13 @@ async def help_cmd(ctx):
     
     await ctx.send(embed=embed, view=view)
 
-# التعامل مع محاولة استخدام الأوامر في روم غير مخصص (تجاهل أو تفاعل صامت)
+# أمر اختبار للتأكد من استجابة البوت في الروم المخصص
+@bot.command(name="بينغ")
+@in_allowed_channel()
+async def ping(ctx):
+    await ctx.send("البوت شغال ويستجيب بنجاح! 🚀")
+
+# التعامل مع محاولة استخدام الأوامر في روم غير مخصص
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure):
