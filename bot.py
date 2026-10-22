@@ -62,6 +62,7 @@ class BankBot(commands.Bot):
             if not active:
                 now = datetime.now(timezone.utc)
                 await c.execute("INSERT INTO seasons(name,starts_at,ends_at,active) VALUES($1,$2,$3,TRUE)", f"الموسم {now.strftime('%Y-%m')}", now, now+timedelta(days=30))
+        self.add_view(BankPanelView())
         if GUILD_ID.isdigit():
             g = discord.Object(id=int(GUILD_ID)); self.tree.copy_global_to(guild=g); await self.tree.sync(guild=g)
             log.info("Synced commands to test guild %s", GUILD_ID)
@@ -386,6 +387,106 @@ async def history(i:discord.Interaction):
     async with bot.pool.acquire() as c: rows=await c.fetch("SELECT kind,amount,note,created_at FROM transactions WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10",i.user.id)
     desc='\n'.join(f"`{r['created_at'].strftime('%m-%d %H:%M')}` · {r['kind']} · **{r['amount']:+,}** · {r['note']}" for r in rows) or "لا توجد عمليات مسجلة بعد."
     await i.response.send_message(embed=discord.Embed(title="🧾 آخر العمليات",description=desc,color=discord.Color.dark_teal()),ephemeral=True)
+
+# واجهات تفاعلية عامة: بطاقات + شبكة أزرار.
+GAME_EMOJIS = ["👾", "🦆", "🤡", "🚩", "🥜", "⚔️", "🧠", "🦫", "🏓"]
+
+class EmojiGameView(discord.ui.View):
+    def __init__(self, owner_id: int, correct: str):
+        super().__init__(timeout=90)
+        self.owner_id, self.correct, self.finished = owner_id, correct, False
+        for idx, emoji in enumerate(GAME_EMOJIS):
+            button = discord.ui.Button(label=emoji, style=discord.ButtonStyle.primary if idx == 0 else discord.ButtonStyle.danger, row=idx // 3, custom_id=f"bank_emoji_{owner_id}_{idx}")
+            button.callback = self.make_callback(emoji)
+            self.add_item(button)
+
+    def make_callback(self, chosen: str):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.owner_id:
+                await interaction.response.send_message("هذه الجولة ليست لك؛ ابدأ جولتك بالأمر `/لعبة_الإيموجي`.", ephemeral=True)
+                return
+            if self.finished:
+                await interaction.response.send_message("انتهت هذه الجولة بالفعل. ابدأ جولة جديدة!", ephemeral=True)
+                return
+            self.finished = True
+            won = chosen == self.correct
+            reward = random.randint(80, 160) if won else 0
+            await bot.ensure_user(interaction.user)
+            if won:
+                async with bot.pool.acquire() as c:
+                    await c.execute("UPDATE users SET wallet=wallet+$1,updated_at=NOW() WHERE user_id=$2", reward, interaction.user.id)
+                    await c.execute("INSERT INTO transactions(user_id,kind,amount,note) VALUES($1,$2,$3,$4)", interaction.user.id, "لعبة الإيموجي", reward, "فوز في لعبة الإيموجي")
+                await bot.add_xp(interaction.user.id, 10)
+            for item in self.children:
+                item.disabled = True
+                if isinstance(item, discord.ui.Button) and item.label == self.correct:
+                    item.style = discord.ButtonStyle.success
+                elif isinstance(item, discord.ui.Button) and item.label == chosen and not won:
+                    item.style = discord.ButtonStyle.danger
+            e = discord.Embed(title="🎮 لعبة الإيموجي · النتيجة", description=f"{interaction.user.mention}\n\n" + (f"🎉 **اختيار صحيح!** ربحت **{reward:,}** 🪙" if won else "😔 **لم يحالفك الحظ!**") + f"\n\n🚩 الإيموجي الصحيح: **{self.correct}**", color=discord.Color.gold() if won else discord.Color.dark_red())
+            e.set_thumbnail(url=interaction.user.display_avatar.url)
+            e.set_footer(text="بوت البانك • لعبة الإيموجي")
+            await interaction.response.edit_message(embed=e, view=self)
+        return callback
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+class BankPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="لعبة الإيموجي", emoji="🎮", style=discord.ButtonStyle.primary, custom_id="albank_panel_game")
+    async def game(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await send_emoji_game(interaction, ephemeral=False)
+
+    @discord.ui.button(label="رصيدي", emoji="💰", style=discord.ButtonStyle.success, custom_id="albank_panel_balance")
+    async def balance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await bot.ensure_user(interaction.user)
+        async with bot.pool.acquire() as c:
+            r = await c.fetchrow("SELECT wallet,bank,level,xp FROM users WHERE user_id=$1", interaction.user.id)
+        e = discord.Embed(title=f"💳 محفظة {interaction.user.display_name}", color=discord.Color.gold())
+        e.add_field(name="المحفظة", value=f"🪙 {r['wallet']:,}")
+        e.add_field(name="البنك", value=f"🏦 {r['bank']:,}")
+        e.add_field(name="المستوى", value=f"⭐ {r['level']} · {r['xp']} XP")
+        e.set_thumbnail(url=interaction.user.display_avatar.url)
+        await interaction.response.send_message(embed=e, ephemeral=True)
+
+    @discord.ui.button(label="المتصدرون", emoji="🏆", style=discord.ButtonStyle.secondary, custom_id="albank_panel_leaderboard")
+    async def leaderboard(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async with bot.pool.acquire() as c:
+            rows = await c.fetch("SELECT username,wallet+bank AS wealth FROM users ORDER BY wealth DESC LIMIT 10")
+        lines = [f"**{n}.** {r['username']} — 🪙 **{r['wealth']:,}**" for n, r in enumerate(rows, 1)]
+        e = discord.Embed(title="🏆 أغنى أعضاء بوت البانك", description="\n".join(lines) or "لا توجد بيانات بعد.", color=discord.Color.gold())
+        await interaction.response.edit_message(embed=e, view=self)
+
+    @discord.ui.button(label="المتجر", emoji="🛍️", style=discord.ButtonStyle.secondary, custom_id="albank_panel_shop")
+    async def shop(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async with bot.pool.acquire() as c:
+            rows = await c.fetch("SELECT name,description,price,emoji,stock FROM shop_items ORDER BY price")
+        lines = [f"{r['emoji']} **{r['name']}** — 🪙 {r['price']:,}\n{r['description']}" + (" · نفد المخزون" if r['stock'] == 0 else "") for r in rows]
+        e = discord.Embed(title="🛍️ متجر البانك", description="\n\n".join(lines) or "المتجر فارغ حاليًا.", color=discord.Color.gold())
+        e.set_footer(text="تفاصيل الشراء وإتمامه تبقى خاصة بصاحب الحساب")
+        await interaction.response.edit_message(embed=e, view=self)
+
+async def send_emoji_game(interaction: discord.Interaction, ephemeral: bool):
+    correct = random.choice(GAME_EMOJIS)
+    e = discord.Embed(title="🎯 اختر الإيموجي الصحيح", description=f"{interaction.user.mention}، اختر واحدًا من الأزرار التسعة.\n\n**الجائزة:** 80–160 🪙\n**المحاولات:** محاولة واحدة", color=discord.Color.blurple())
+    e.set_thumbnail(url=interaction.user.display_avatar.url)
+    e.set_footer(text="النتيجة تظهر للجميع • لا تخصم العملات عند الخسارة")
+    await interaction.response.send_message(embed=e, view=EmojiGameView(interaction.user.id, correct), ephemeral=ephemeral)
+
+@bot.tree.command(name="لوحة_البانك", description="نشر لوحة بوت البانك التفاعلية في القناة")
+@app_commands.default_permissions(manage_guild=True)
+async def bank_panel(i: discord.Interaction):
+    e = discord.Embed(title="🏦 بوت البانك", description="**اقتصادك. ألعابك. منافستك.**\n\nاختر أحد الأقسام من الأزرار أدناه.\n\n🎮 ألعاب تفاعلية\n💰 رصيد شخصي خاص\n🏆 ترتيب عام للأعضاء\n🛍️ متجر الاقتصاد", color=discord.Color.from_rgb(225, 190, 35))
+    e.set_footer(text="بوت البانك • العملات افتراضية")
+    await i.response.send_message(embed=e, view=BankPanelView())
+
+@bot.tree.command(name="لعبة_الإيموجي", description="ابدأ لعبة إيموجي تفاعلية واربح عملات")
+async def emoji_game(i: discord.Interaction):
+    await send_emoji_game(i, ephemeral=False)
 
 @bot.tree.command(name="مساعدة",description="عرض أنظمة وأوامر بوت البانك")
 async def help_command(i:discord.Interaction):
