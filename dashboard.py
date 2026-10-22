@@ -1,4 +1,5 @@
 import os
+import html
 import asyncpg
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -34,7 +35,7 @@ async def shutdown():
 def page(title, body, user=None):
     nav = '<a href="/">الرئيسية</a><a href="/leaderboard">المتصدرون</a>'
     if user:
-        nav += f'<span class="user">مسجل الدخول: {user.get("username","عضو")}</span><a href="/logout">خروج</a>'
+        nav += f'<a href="/profile">حسابي</a><span class="user">مسجل الدخول: {html.escape(user.get("username","عضو"))}</span><a href="/logout">خروج</a>'
     else:
         nav += '<a class="login" href="/login">تسجيل الدخول بديسكورد</a>'
     return f"""<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
@@ -64,7 +65,7 @@ async def home(request: Request):
             stats["wealth"] = await conn.fetchval("SELECT COALESCE(SUM(wallet+bank),0) FROM users") or 0
     body = f"""
     <section class="card"><div class="label">عالمك الاقتصادي في مكان واحد</div><h1>ابنِ ثروتك. استثمر. نافس.</h1>
-    <p>لوحة متابعة لاقتصاد البوت، ثروات الأعضاء وترتيبهم. هذه نسخة البداية، وستضاف صفحات المخزون والنقابات والاستثمارات مع توسع المشروع.</p>
+    <p>تابع اقتصاد السيرفر، ترتيب الثروات، حسابك الشخصي، وسوق الأصول الافتراضية. أنظمة اللعب والمتجر والمغامرات والنقابات تعمل من خلال أوامر Discord.</p>
     <a class="btn" href="/leaderboard">عرض المتصدرين ←</a></section>
     <section class="grid">
       <div class="card"><div class="label">الأعضاء المسجلون</div><div class="value">{stats['users']:,}</div></div>
@@ -73,7 +74,7 @@ async def home(request: Request):
     </section>
     """
     if not user:
-        body += '<section class="card"><h2>اربط حسابك</h2><p>تسجيل دخول Discord سيتيح تخصيص الصفحات الشخصية في المرحلة التالية.</p><a class="btn" href="/login">تسجيل الدخول عبر Discord</a></section>'
+        body += '<section class="card"><h2>اربط حسابك</h2><p>سجّل الدخول عبر Discord لعرض ملخص حسابك من لوحة الموقع.</p><a class="btn" href="/login">تسجيل الدخول عبر Discord</a></section>'
     return page("الرئيسية", body, user)
 
 @app.get("/leaderboard", response_class=HTMLResponse)
@@ -84,11 +85,33 @@ async def leaderboard(request: Request):
         async with pool.acquire() as conn:
             rows = await conn.fetch("SELECT username, wallet, bank, wallet+bank AS wealth FROM users ORDER BY wealth DESC LIMIT 50")
     if rows:
-        trs = "".join(f"<tr><td>{i}</td><td>{r['username']}</td><td>{r['wallet']:,}</td><td>{r['bank']:,}</td><td><b>{r['wealth']:,}</b></td></tr>" for i, r in enumerate(rows, 1))
+        trs = "".join(f"<tr><td>{i}</td><td>{html.escape(r['username'])}</td><td>{r['wallet']:,}</td><td>{r['bank']:,}</td><td><b>{r['wealth']:,}</b></td></tr>" for i, r in enumerate(rows, 1))
     else:
         trs = '<tr><td colspan="5">لا توجد بيانات بعد. استخدم أوامر البوت لبدء الاقتصاد.</td></tr>'
     body = f'<h1>🏆 المتصدرون</h1><p>ترتيب الأعضاء حسب إجمالي المحفظة والبنك.</p><div class="card"><table><thead><tr><th>#</th><th>العضو</th><th>المحفظة</th><th>البنك</th><th>الثروة</th></tr></thead><tbody>{trs}</tbody></table></div>'
     return page("المتصدرون", body, user)
+
+@app.get("/profile", response_class=HTMLResponse)
+async def profile(request: Request):
+    user = request.session.get("discord_user")
+    if not user:
+        return RedirectResponse("/login")
+    wallet = bank = level = xp = 0
+    if pool:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT wallet,bank,level,xp FROM users WHERE user_id=$1", int(user["id"]))
+        if row:
+            wallet, bank, level, xp = row["wallet"], row["bank"], row["level"], row["xp"]
+    body = (
+        '<h1>👤 حسابي</h1><p>ملخص حسابك الاقتصادي في بوت البانك.</p>'
+        '<section class="grid">'
+        f'<div class="card"><div class="label">المحفظة</div><div class="value">{wallet:,} 🪙</div></div>'
+        f'<div class="card"><div class="label">البنك</div><div class="value">{bank:,} 🏦</div></div>'
+        f'<div class="card"><div class="label">إجمالي الثروة</div><div class="value">{wallet+bank:,} 🪙</div></div>'
+        f'<div class="card"><div class="label">المستوى والخبرة</div><div class="value">{level} · {xp} XP</div></div>'
+        '</section><p>إذا ظهرت الأرصدة صفرًا، استخدم أي أمر من البوت في Discord أولًا لتسجيل حسابك.</p>'
+    )
+    return page("حسابي", body, user)
 
 @app.get("/login")
 async def login(request: Request):
