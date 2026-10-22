@@ -3,6 +3,7 @@ from discord.ext import commands
 import os
 import random
 import asyncio
+import time
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -13,8 +14,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # روم الـ bank المخصص للأوامر
 ALLOWED_CHANNEL_ID = 1544385495310540881
 
-# قاعدة بيانات مؤقتة للأرصدة
+# قواعد بيانات مؤقتة لتخزين البيانات
 user_balances = {}
+user_properties = {}
+salary_cooldowns = {}
 
 def get_balance(user_id):
     return user_balances.get(user_id, 1000)
@@ -33,8 +36,8 @@ def in_allowed_channel():
         return True
     return commands.check(predicate)
 
-# لوحة المساعدة والأسعار المطابقة للصورة تماماً
-@bot.command(name="مساعدة")
+# 1. أمر المساعدة والأسعار الرئيسي
+@bot.command(name="مساعدة", aliases=["اسعار"])
 @in_allowed_channel()
 async def help_cmd(ctx):
     embed = discord.Embed(
@@ -50,32 +53,106 @@ async def help_cmd(ctx):
     embed.add_field(name="🏟️ ملاعب", value="📉 3,819,391 $", inline=False)
     
     view = discord.ui.View()
-    
-    # زر معلومات الأسعار مع تفاعل آمن لمنع خطأ عدم الاستجابة
     price_button = discord.ui.Button(label="معلومات الاسعار", style=discord.ButtonStyle.secondary)
     
-    async def button_callback(interaction: discord.Interaction):
-        # الاستجابة الفورية لتجنب مشكلة The application didn't respond
-        await interaction.response.send_message("📊 **معلومات الأسعار:** يتم تحديث الأسعار صعوداً وهبوطاً تلقائياً كل 5 دقائق بناءً على حركة السوق والتداول في البنك.", ephemeral=True)
-
-    price_button.callback = button_callback
+    async def price_cb(interaction: discord.Interaction):
+        await interaction.response.send_message("📊 **معلومات الأسعار:** يتم تحديث الأسعار صعوداً وهبوطاً تلقائياً لكل الأصول في السوق.", ephemeral=True)
+    price_button.callback = price_cb
     view.add_item(price_button)
     
     await ctx.send(embed=embed, view=view)
 
-# أمر الرصيد
-@bot.command(name="رصيد")
+# 2. أمر الرصيد وكشف الحساب
+@bot.command(name="رصيد", aliases=["كشف"])
 @in_allowed_channel()
-async def balance_cmd(ctx):
-    bal = get_balance(ctx.author.id)
+async def balance_cmd(ctx, member: discord.Member = None):
+    target = member or ctx.author
+    bal = get_balance(target.id)
     embed = discord.Embed(
         title="حسابك المصرفي | Central Bank",
-        description=f"رصيدك الحالي: **{bal:,} $**",
+        description=f"رصيد العضو {target.mention}\nالحالي: **{bal:,} $**",
         color=discord.Color.gold()
     )
     await ctx.send(embed=embed)
 
-# لعبة الإيموجي السريعة والمنسقة للأزرار
+# 3. أمر التحويل
+@bot.command(name="تحويل")
+@in_allowed_channel()
+async def transfer_cmd(ctx, member: discord.Member, amount: int):
+    if amount <= 0:
+        await ctx.send("❌ الرجاء إدخال مبلغ صحيح!")
+        return
+    
+    sender_bal = get_balance(ctx.author.id)
+    if sender_bal < amount:
+        await ctx.send("❌ رصيدك الحالي لا يكفي لإتمام عملية التحويل.")
+        return
+    
+    set_balance(ctx.author.id, sender_bal - amount)
+    receiver_bal = get_balance(member.id)
+    set_balance(member.id, receiver_bal + amount)
+    
+    await ctx.send(f"✅ تم تحويل مبلغ **{amount:,} $** بنجاح إلى العضو {member.mention}")
+
+# 4. أمر الراتب (مع تحدي ترتيب الأرقام السريع)
+@bot.command(name="راتب")
+@in_allowed_channel()
+async def salary_cmd(ctx):
+    # توليد 6 أرقام عشوائية لترتيبها تصاعدياً
+    nums = random.sample(range(10, 100), 6)
+    sorted_nums = sorted(nums)
+    
+    embed = discord.Embed(
+        title="الراتب | Central Bank",
+        description=f"يجب عليك ترتيب الأعداد تصاعدياً في 60 ثانية:\n**{'  '.join(map(str, nums))}**\n\nاكتب الأرقام بالترتيب في رسالة واحدة (مفصولة بمسافات).",
+        color=discord.Color.blue()
+    )
+    await ctx.send(embed=embed)
+    
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel
+
+    try:
+        msg = await bot.wait_for('message', timeout=60.0, check=check)
+        user_input = [int(n) for n in msg.content.split() if n.isdigit()]
+        
+        if user_input == sorted_nums:
+            current = get_balance(ctx.author.id)
+            set_balance(ctx.author.id, current + 5000)
+            await ctx.send(f"🎉 ممتاز! لقد رتبت الأرقام بشكل صحيح وتم إيداع **5,000 $** راتبك في حسابك.")
+        else:
+            await ctx.send(f"⚠️ لم تقم بترتيب الاعداد بشكل صحيح 😒\nلن يتم اضافة مبلغ الراتب لحسابك.")
+    except asyncio.TimeoutError:
+        await ctx.send(f"⏰ انتهى وقت الإنتظار! لم يتم إيداع الراتب.")
+
+# 5. أمر التداول والاستثمار
+@bot.command(name="تداول")
+@in_allowed_channel()
+async def trade_cmd(ctx, amount: int = None):
+    if not amount:
+        embed = discord.Embed(
+            title="تداول | Central Bank",
+            description="طريقة الاستخدام :\n`!تداول المبلغ`",
+            color=discord.Color.dark_theme()
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    bal = get_balance(ctx.author.id)
+    if bal < amount:
+        await ctx.send("❌ رصيدك لا يكفي للتداول بهذا المبلغ.")
+        return
+    
+    profit = random.choice([True, False])
+    if profit:
+        won_amount = int(amount * 1.5)
+        set_balance(ctx.author.id, bal + won_amount)
+        await ctx.send(f"📈 ربحت في صفقة التداول وتمت إضافة **{won_amount:,} $** لحسابك!")
+    else:
+        set_balance(ctx.author.id, bal - amount)
+        await ctx.send(f"📉 خسرت في صفقة التداول وتم خصم **{amount:,} $** من رصيدك.")
+
+# 6. لعبة الإيموجي التفاعلية
 @bot.command(name="ايموجي")
 @in_allowed_channel()
 async def emoji_game(ctx):
@@ -84,7 +161,7 @@ async def emoji_game(ctx):
     
     embed = discord.Embed(
         title="لعبة الإيموجي | Central Bank",
-        description="اختر الإيموجي الصحيح من الأسفل:\nفي حال الفوز سيتم إضافة مبلغ **1500 $** إلى رصيدك.",
+        description="اختر الإيموجي الصحيح:\nفي حال الفوز سيتم إضافة مبلغ **1500 $** إلى رصيدك.",
         color=discord.Color.dark_theme()
     )
     
@@ -94,7 +171,6 @@ async def emoji_game(ctx):
         
         async def make_callback(e=emo):
             async def btn_cb(interaction: discord.Interaction):
-                # تأكيد الاستجابة السريعة لمنع خطأ المهلة
                 if interaction.user != ctx.author:
                     await interaction.response.send_message("هذه اللعبة ليست لك!", ephemeral=True)
                     return
